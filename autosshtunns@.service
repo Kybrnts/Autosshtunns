@@ -1,0 +1,24 @@
+#: Title       : Autossh@.service
+#: Date        : 2017-09-26
+#: Authors     : Kybernetes <correodelkybernetes@gmail.com>
+#: Version     : 1.0.0
+#: Description : Systemd unit file
+#:             : Manages multiple autossh instances. This is meant to be issued by systemctl
+#
+[Unit]
+Description=Autosshtunns automatic ssh monitor & restarter - %i instance
+After=syslog.target network.target
+
+[Service]
+Type=simple
+
+User=asshtunns
+Group=asshtunns
+WorkingDirectory=/home/asshtunns
+
+EnvironmentFile=/etc/autosshtunns/%i.conf
+ExecStart=/usr/local/bin/autosshtunns
+ExecStop=/bin/kill -15 $MAINPID
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,138 @@
+#!/bin/sh
+#: Title       : Autosshtunns
+#: Date        : 2017-09-26
+#: Authors     : "Kybernetes" <correodelkybernetes@gmail.com>
+#: Version     : 1.0.0
+#: Description : Executable Dash shell script file. Uses environment variables to assemble an argument line for the ssh
+#:             : client. Then it issues a self restarting ssh connection wrapping ssh w/autossh, using mentioned line
+#:             : as ssh arguments. The main purpose is to use the env. vars to create persistent ssh tunnels, and it is
+#:             : meant to be issued by autossh@.service unit.
+#: Options     : N/A
+#: Environment : Below env vars are set by /etc/autosshtunns/*.conf file using the "EnvironmentFile" Systemd directive.
+#:             : * AUTOSSH_GATETIME   : Turns on/off gatetime behaviour and makes autossh ignore first run failure. It
+#:             :                        is required to be set to 0;
+#:             : * _PORT$i (i=0,1..)  : Local ports to be forwarded. Index should start in 0, and any non consecutive
+#:             :                        indexed var will be ignored. The index range defines de used range for the rest
+#:             :                        variables lists such as _HOST$i or _HOSTPORT$i (except for _DPORT$j);
+#:             : * _HOST$i            : Remote network host's local hostname or address;
+#:             : * _HOSTPORT$i        : Remote network host's port;
+#:             : * _DPORT$j (j=0,1..) : Local port for dynamic application-level forwarding (Socks);
+#:             : * _USER              : Remote host login name
+#:             : * _HOSTNAME          : Remote host name (connection end point);
+#:             : * _SSHARGS           : Additional ssh options/arguments.
+##
+## -- Required for execution -------------------------------------------------------------------------------------------
+type autossh >/dev/null || exit 1
+##
+## -- Globals ----------------------------------------------------------------------------------------------------------
+# Declare the following useful symbols:
+IFS=                                            ## Clear the IFS in case they a messy one has been exported;
+readonly _SPC=" "                               ## Space (readonly uses a word for assignment's LHS);
+readonly _TAB="$(printf "\t")"                  ## Tab;
+_EOL="$(printf "\n:")"; readonly _EOL=${_EOL%?} ## En of line (newline);
+IFS=$_SPC$_TAB$_EOL                             ## Now reset the IFS as expected
+##
+## -- Auxiliary functions ----------------------------------------------------------------------------------------------
+stdmsg() { #@ DESCRIPTION: Print messages to STDOUT
+           #@ USAGE: stdmsg [ MSG ... ]
+    [ "${1+X}" = X ] && printf "%s\n" "$@"
+}
+errmsg() { #@ DESCRIPTION: Print messages to STDERR prefixed by an error stamp
+           #@ USAGE: stderr [ MSG ... ]
+    stdmsg ${1+"Error! $@"} >&2
+}
+isset() { #@ DESCRIPTION: Tests if $1 name is set (i.e. is not the NULL ptr)
+          #@ USAGE: isset NAME
+    eval "[ \"\${$1+X}\" = X ]" ## Expands to X only when $1 is unset, where comparison succeeds. Otherwise, fail.
+}
+isnul() { #@ DESCRIPTION: Tests if $1 name contains a null string (i.e. just \0 char).
+          #@ USAGE: isnul NAME
+    eval "[ \"X\$$1\" = X ]" ## Fails when $1 is concatenation neutral
+}
+nmric() { #@ DESCRIPTION: Tests if $1 string contains only numeric characters.
+          #@ USAGE: nmric '[ STRING ]'
+    case $1 in                ## Test if $1 string contains non-digit chars
+        *[!0-9]*) return 1 ;; ## Contains non numeric chars, so return 1
+    esac
+}
+iswrd() { #@ DESCRIPTION: Tests if $1 string is a word (i.e. doesn't contain any spaces, \t or \n chars)
+          #@ USAGE: iswrd '[ STRING ]'
+    case $1 in                  ## Test if $1 string contains any of the $IFS chars
+        *["$IFS"]*) return 1 ;; ## If it does, return 1
+    esac
+}
+##
+## -- MAIN -------------------------------------------------------------------------------------------------------------
+main() {
+    set -- ## Discard any positional parameters
+    # Local variables (If local is used, it should appear as the first statement of a function)
+    local i j sshargs
+    #
+    # We require AUTOSSH_GATETIME to be set to 0 and to be part of the environment so..
+    export AUTOSSH_GATETIME=0
+    #
+    # Create and accumulate ssh forwardings arguments
+    i=0 asshargs="-M0 -N" ## Initialize counter and ssh args
+    while isset "_PORT$i" && ! isnul "_PORT$i"; do ## Iterate on set and nonnull _PORT$i names
+        if ! eval "nmric \$_PORT$i"; then          ## Each port number must be numeric, if not..
+            errmsg "Wrong _PORT$i value"           ## * Print an error message
+            return 1                               ## * Finish execution
+        fi
+        if ! isset "_HOST$i" || isnul "_HOST$i"; then ## Also, matching host must be defined, if not
+            errmsg "Undefined matching _HOST$i"       ## * finish execution w/errors
+            return 2
+        fi
+        if ! iswrd "$( eval "stdmsg \"\$_HOST$i"\" )"; then  ## No spaces allowed in any hostanmes, if present..
+            errmsg "Wrong _HOST$i value"                     ## Finish execution w/errors
+            return 1 
+        fi
+        if ! isset "_HOSTPORT$i" || isnul "_HOSTPORT$i"; then ## Also, matching hostport must be defined, if not
+            errmsg "Undefined matching _HOSTPORT$i"           ## * finish execution w/errors
+            return 2
+        fi
+        if ! eval "nmric \$_HOSTPORT$i"; then ## Hostport must be numeric as well, so..
+            errmsg "Wrong _HOSTPORT$i value"  ## * Proceed as w/_PORTx
+            return 1
+        fi
+        eval "asshargs=\"$asshargs -L\$_PORT$i:\$_HOST$i:\$_HOSTPORT$i\"" ## Now accumulate fws in arguments
+        i=$((i + 1))                                                      ## Increase forwardings counter
+    done
+    #
+    # Create and accumulate ssh optional forwardings arguments
+    j=0
+    while isset "_DPORT$j" && ! isnul "_DPORT$j"; do ## Iterate on set and nonnull _DPORT$j names
+        if ! eval "nmric \$_DPORT$j"; then ## Each dynamic fw port must be numeric, if not..
+            errmsg "Wrong _DPORT$j value"  ## * Print an error message
+            return 1                       ## * Finish execution
+        fi
+        eval "asshargs=\"$asshargs -D\$_DPORT$j\"" ## Now accumulate dynamic fws in arguments
+        j=$((j + 1))                               ## And increase de dyn fws counter
+    done
+    ##
+    ## Final checks..
+    if [ $i -eq 0 -a $j -eq 0 ]; then       ## There must be at least one forwarding to be done, if not..
+        errmsg "No tcp forwarding defined"  ## * Print an error message
+        return 3                            ## * Finish execution
+    fi
+    if ! isset "_HOSTNAME" || isnul "_HOSTNAME"; then ## Require a defined hostname (connection endpoint), otherwise..
+        errmsg "Undefined remote hostname/IP"         ## * Finish execution w/errors
+        return 2
+    fi
+    if ! iswrd "$_HOSTNAME"; then      ## No spaces allowed in any hostanmes, so if present..
+        errmsg "Wrong _HOSTNAME value" ## * Finish execution w/errors
+        return 1 
+    fi
+    if isset "_USER" && ! isnul "_USER"; then ## If optional login name is present
+        if ! iswrd "$_USER"; then             ## Make sure that it contains no spaces
+            errmsg "Wrong _USER value"
+            return 1
+        fi                                    ## If optional login name is present
+        asshargs="$asshargs -l $_USER"        ## Append environment's login name (if present)
+    fi
+    asshargs="$asshargs"${_SSHARGS:+" $_SSHARGS"} ## Also append optional additional ssh arguments
+    asshargs="$asshargs $_HOSTNAME"               ## Append environment's hostname
+    exec autossh $asshargs                        ## Do the autossh forwards in current process
+}
+##
+## -- RUN! -------------------------------------------------------------------------------------------------------------
+main "$@"
