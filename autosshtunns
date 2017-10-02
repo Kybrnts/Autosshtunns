@@ -3,10 +3,10 @@
 #: Date        : 2017-09-26
 #: Authors     : "Kybernetes" <correodelkybernetes@gmail.com>
 #: Version     : 1.0.0
-#: Description : Executable Dash shell script file. Uses environment variables to assemble an argument line for the ssh
-#:             : client. Then it issues a self restarting ssh connection wrapping ssh w/autossh, using mentioned line
-#:             : as ssh arguments. The main purpose is to use the env. vars to create persistent ssh tunnels, and it is
-#:             : meant to be issued by autossh@.service unit.
+#: Description : Executable Dash shell script file that uses environment variables to assemble an arguments string for
+#:             : the persistent autosssh ssh client. It issues a self restarting ssh connection wrapping ssh w/autossh
+#:             : using mentioned arguments string. Its main purpose is to use the environment to create a group of
+#:             : persistent ssh tunnels, and it is meant to be issued by provided autossh@.service unit.
 #: Options     : N/A
 #: Environment : Below env vars are set by /etc/autosshtunns/*.conf file using the "EnvironmentFile" Systemd directive.
 #:             : * AUTOSSH_GATETIME   : Turns on/off gatetime behaviour and makes autossh ignore first run failure. It
@@ -19,7 +19,7 @@
 #:             : * _DPORT$j (j=0,1..) : Local port for dynamic application-level forwarding (Socks);
 #:             : * _USER              : Remote host login name
 #:             : * _HOSTNAME          : Remote host name (connection end point);
-#:             : * _SSHARGS           : Additional ssh options/arguments.
+#:             : * _SSHARGS           : Additional ssh options/arguments (no checks performed, so unsafe)
 ##
 ## -- Required for execution -------------------------------------------------------------------------------------------
 type autossh >/dev/null || exit 1
